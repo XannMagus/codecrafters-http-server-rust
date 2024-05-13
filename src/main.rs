@@ -12,7 +12,7 @@ fn main() {
     //
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => {
+            Ok(mut stream) => {
                 println!("accepted new connection");
                 write!(stream, "HTTP/1.1 {} {}\r\n\r\n", 200, "OK").expect("Could not write to stream buffer");
             }

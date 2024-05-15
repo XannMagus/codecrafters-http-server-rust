@@ -10,6 +10,7 @@ pub enum HttpStatus {
     BadRequest,
 }
 
+#[derive(Debug)]
 pub enum HttpVersion {
     V10,
     V11,
@@ -29,25 +30,36 @@ pub enum HttpMethod {
     TRACE,
 }
 
+#[derive(Debug)]
+pub enum MimeType {
+    PlainText,
+    JSON,
+    HTML,
+}
+
 pub enum HttpError {
     NotFound(String),
     MethodNotAllowed(Vec<HttpMethod>),
     BadRequest(ParseError),
 }
 
+#[derive(Debug)]
 pub struct HttpHeader {
-    name: String,
-    value: String,
+    pub name: String,
+    pub value: String,
 }
 
+#[derive(Debug)]
 pub struct HttpHeaderCollection {
     headers: HashMap<String, HttpHeader>,
 }
 
+#[derive(Debug)]
 pub struct HttpRequest {
     pub method: HttpMethod,
     pub path: String,
     pub version: HttpVersion,
+    pub headers: HttpHeaderCollection,
 }
 
 pub struct HttpResponse {
@@ -79,7 +91,33 @@ impl HttpRequest {
         let mut buf_reader = BufReader::new(&mut stream);
         let mut request_string = String::new();
         buf_reader.read_line(&mut request_string).or(Err(ParseError::MalformedRequest))?;
-        let mut request_parts = request_string.split_ascii_whitespace();
+
+        let (method, version, path) = Self::parse_first_line(request_string)?;
+
+        let mut headers = HttpHeaderCollection::new();
+
+        for line in buf_reader.lines() {
+            if let Ok(line) = line {
+                if line.trim().is_empty() {
+                    break;
+                }
+
+                let parts: Vec<&str> = line.split(":").collect();
+
+                headers.add_header(
+                    parts.get(0).unwrap().trim().to_string(),
+                    parts.get(1).unwrap().trim().to_string(),
+                );
+            } else {
+                return Err(ParseError::MalformedRequest);
+            }
+        }
+
+        Ok(Self { method, path, version, headers })
+    }
+
+    fn parse_first_line(first_line: String) -> Result<(HttpMethod, HttpVersion, String), ParseError> {
+        let mut request_parts = first_line.split_ascii_whitespace();
 
         let Some(method) = request_parts.next() else {
             return Err(ParseError::MissingMethod);
@@ -95,7 +133,7 @@ impl HttpRequest {
         };
         let version = HttpVersion::from_str(version)?;
 
-        Ok(Self { method, path: path.to_string(), version })
+        Ok((method, version, path.to_string()))
     }
 }
 
@@ -153,26 +191,29 @@ impl HttpResponseBuilder {
         self
     }
 */
-    pub fn with_body(mut self, body: String) -> Self {
+    pub fn with_body(mut self, body: String, mime_type: MimeType) -> Self {
+        self.headers.add_header("Content-Type".to_string(), mime_type.to_string());
+        self.headers.add_header("Content-Length".to_string(), body.len().to_string());
         self.body = Some(body);
         self
     }
 
-    pub fn add_header(mut self, name: String, value: String) -> Self {
-        self.headers.add_header(name, value);
-        self
-    }
-/*
-    pub fn add_header_object(mut self, header: HttpHeader) -> Self {
-        self.headers.add_header_object(header);
-        self
-    }
+    /*
+        pub fn add_header(mut self, name: String, value: String) -> Self {
+            self.headers.add_header(name, value);
+            self
+        }
+        
+        pub fn add_header_object(mut self, header: HttpHeader) -> Self {
+            self.headers.add_header_object(header);
+            self
+        }
 
-    pub fn add_headers(mut self, headers: Vec<HttpHeader>) -> Self {
-        self.headers.add_vector(headers);
-        self
-    }
-*/
+        pub fn add_headers(mut self, headers: Vec<HttpHeader>) -> Self {
+            self.headers.add_vector(headers);
+            self
+        }
+    */
     pub fn to_response(self) -> HttpResponse {
         let version = self.version.unwrap_or(HttpVersion::V11);
         let status = self.status.unwrap_or(HttpStatus::OK);
@@ -221,6 +262,19 @@ impl HttpHeaderCollection {
         }
 
         Self { headers }
+    }
+
+    /*
+    pub fn get(&self, key: &String) -> Option<&HttpHeader> {
+        self.headers.get(key)
+    }
+*/
+    pub fn get_value(&self, key: &String) -> Option<String> {
+        if let Some(header) = self.headers.get(key) {
+            Some(header.value.clone())
+        } else {
+            None
+        }
     }
 
     pub fn add_header(&mut self, key: String, value: String) {
@@ -277,6 +331,12 @@ impl Display for HttpResponse {
     }
 }
 
+impl Display for HttpRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}\r\n{}\r\n", self.method, self.path, self.version, self.headers)
+    }
+}
+
 impl Display for HttpHeader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}\r\n", self.name, self.value)
@@ -290,6 +350,17 @@ impl Display for HttpHeaderCollection {
             result = write!(f, "{}", header);
         }
         result
+    }
+}
+
+impl Display for MimeType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let string_representation = match self {
+            MimeType::PlainText => "text/plain",
+            MimeType::JSON => "application/json",
+            MimeType::HTML => "text/html",
+        };
+        write!(f, "{string_representation}")
     }
 }
 

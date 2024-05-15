@@ -1,4 +1,6 @@
-use std::io::Write;
+use std::env;
+use std::fs::File;
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 use crate::http::{HttpError, HttpMethod, HttpRequest, HttpResponse, HttpResponseBuilder, MimeType};
@@ -6,13 +8,29 @@ use crate::http::{HttpError, HttpMethod, HttpRequest, HttpResponse, HttpResponse
 mod http;
 
 fn main() {
+    // Get the directory flag if specified
+    let mut directory = None;
+
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--directory" => {
+                directory = args.next();
+            }
+            _ => {}
+        }
+    }
+
+    let directory = directory.unwrap_or(".".to_string());
+    println!("Directory: {directory}\n");
+
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 println!("accepted new connection");
-                let response = handle_request(&stream);
+                let response = handle_request(&stream, &directory);
 
                 let response = match response {
                     Ok(good_response) => format!("{good_response}"),
@@ -28,9 +46,8 @@ fn main() {
     }
 }
 
-fn handle_request(stream: &TcpStream) -> Result<HttpResponse, HttpError> {
+fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, HttpError> {
     let request = HttpRequest::from_stream(&stream)?;
-    println!("{request:?}");
     println!("{request}");
 
     if request.method != HttpMethod::GET {
@@ -56,6 +73,38 @@ fn handle_request(stream: &TcpStream) -> Result<HttpResponse, HttpError> {
                 .to_response();
             Ok(response)
         }
+        path if path.starts_with("/files/") => {
+            let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let param = parts.get(1).unwrap_or(&"");
+            println!("Returning back the file {root}{param}");
+            let body = get_file(root, &param.to_string())?;
+            Ok(HttpResponseBuilder::new().with_body(body, MimeType::OctetStream).to_response())
+        }
         path => Err(HttpError::NotFound(path.to_owned()))
+    }
+}
+
+fn get_file(directory: &String, filename: &String) -> Result<String, HttpError> {
+    let path = format!("{directory}{filename}");
+    
+    match File::open(path) {
+        Ok(mut file) => {
+            let mut buffer = String::new();
+            match file.read_to_string(&mut buffer) {
+                Ok(_) => {
+                    Ok(buffer.clone())
+                }
+                Err(_) => {
+                    Err(HttpError::InternalError)
+                }
+            }
+        }
+        Err(e) => {
+            if e.kind() == ErrorKind::NotFound {
+                Err(HttpError::NotFound(filename.clone()))
+            } else {
+                Err(HttpError::InternalError)
+            }
+        }
     }
 }

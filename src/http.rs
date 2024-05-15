@@ -8,6 +8,7 @@ pub enum HttpStatus {
     MethodNotAllowed,
     NotFound,
     BadRequest,
+    InternalError,
 }
 
 #[derive(Debug)]
@@ -35,12 +36,14 @@ pub enum MimeType {
     PlainText,
     JSON,
     HTML,
+    OctetStream,
 }
 
 pub enum HttpError {
     NotFound(String),
     MethodNotAllowed(Vec<HttpMethod>),
     BadRequest(ParseError),
+    InternalError,
 }
 
 #[derive(Debug)]
@@ -185,12 +188,12 @@ impl HttpResponseBuilder {
         self.version = Some(version);
         self
     }
-
+*/
     pub fn with_status(mut self, status: HttpStatus) -> Self {
         self.status = Some(status);
         self
     }
-*/
+
     pub fn with_body(mut self, body: String, mime_type: MimeType) -> Self {
         self.headers.add_header("Content-Type".to_string(), mime_type.to_string());
         self.headers.add_header("Content-Length".to_string(), body.len().to_string());
@@ -203,7 +206,7 @@ impl HttpResponseBuilder {
             self.headers.add_header(name, value);
             self
         }
-        
+
         pub fn add_header_object(mut self, header: HttpHeader) -> Self {
             self.headers.add_header_object(header);
             self
@@ -239,6 +242,7 @@ impl HttpError {
                 HttpResponse::with_headers(HttpVersion::V11, HttpStatus::MethodNotAllowed, vec!(HttpHeader::new(String::from("Allowed"), allowed_methods)))
             }
             HttpError::BadRequest(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::BadRequest),
+            HttpError::InternalError => HttpResponseBuilder::new().with_status(HttpStatus::InternalError).to_response()
         }
     }
 }
@@ -301,6 +305,7 @@ impl Display for HttpStatus {
             HttpStatus::MethodNotAllowed => (405, "Method Not Allowed"),
             HttpStatus::NotFound => (404, "Not Found"),
             HttpStatus::BadRequest => (400, "Bad Request"),
+            HttpStatus::InternalError => (500, "Internal Server Error")
         };
 
         write!(f, "{code} {description}")
@@ -359,6 +364,7 @@ impl Display for MimeType {
             MimeType::PlainText => "text/plain",
             MimeType::JSON => "application/json",
             MimeType::HTML => "text/html",
+            MimeType::OctetStream => "application/octet-stream",
         };
         write!(f, "{string_representation}")
     }

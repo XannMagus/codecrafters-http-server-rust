@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::{BufReader, BufRead};
+use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 
 pub enum HttpStatus {
@@ -30,8 +31,17 @@ pub enum HttpMethod {
 
 pub enum HttpError {
     NotFound(String),
-    MethodNotAllowed(HttpMethod),
+    MethodNotAllowed(Vec<HttpMethod>),
     BadRequest(ParseError),
+}
+
+pub struct HttpHeader {
+    name: String,
+    value: String,
+}
+
+pub struct HttpHeaderCollection {
+    headers: HashMap<String, HttpHeader>,
 }
 
 pub struct HttpRequest {
@@ -43,6 +53,15 @@ pub struct HttpRequest {
 pub struct HttpResponse {
     version: HttpVersion,
     status: HttpStatus,
+    headers: HttpHeaderCollection,
+    body: String,
+}
+
+pub struct HttpResponseBuilder {
+    version: Option<HttpVersion>,
+    status: Option<HttpStatus>,
+    headers: HttpHeaderCollection,
+    body: Option<String>,
 }
 
 #[derive(Debug)]
@@ -110,18 +129,115 @@ impl HttpVersion {
 
 impl HttpResponse {
     pub fn new(version: HttpVersion, status: HttpStatus) -> Self {
-        Self { version, status }
+        Self { version, status, body: String::new(), headers: HttpHeaderCollection::new() }
+    }
+
+    pub fn with_headers(version: HttpVersion, status: HttpStatus, headers: Vec<HttpHeader>) -> Self {
+        let headers = HttpHeaderCollection::from_vector(headers);
+        Self { version, status, headers, body: String::new() }
     }
 }
+
+impl HttpResponseBuilder {
+    pub fn new() -> Self {
+        Self { version: None, status: None, headers: HttpHeaderCollection::new(), body: None }
+    }
+/*
+    pub fn with_version(mut self, version: HttpVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    pub fn with_status(mut self, status: HttpStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
+*/
+    pub fn with_body(mut self, body: String) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    pub fn add_header(mut self, name: String, value: String) -> Self {
+        self.headers.add_header(name, value);
+        self
+    }
+/*
+    pub fn add_header_object(mut self, header: HttpHeader) -> Self {
+        self.headers.add_header_object(header);
+        self
+    }
+
+    pub fn add_headers(mut self, headers: Vec<HttpHeader>) -> Self {
+        self.headers.add_vector(headers);
+        self
+    }
+*/
+    pub fn to_response(self) -> HttpResponse {
+        let version = self.version.unwrap_or(HttpVersion::V11);
+        let status = self.status.unwrap_or(HttpStatus::OK);
+        let body = self.body.unwrap_or(String::new());
+
+        HttpResponse {
+            version,
+            status,
+            headers: self.headers,
+            body
+        }
+    }
+}
+
 
 impl HttpError {
     pub fn to_response(&self) -> HttpResponse {
         match self {
             HttpError::NotFound(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::NotFound),
-            HttpError::MethodNotAllowed(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::MethodNotAllowed),
+            HttpError::MethodNotAllowed(methods) => {
+                let allowed_methods = methods.iter().map(|method| method.to_string()).collect::<Vec<String>>().join(",");
+                println!("{allowed_methods}");
+                HttpResponse::with_headers(HttpVersion::V11, HttpStatus::MethodNotAllowed, vec!(HttpHeader::new(String::from("Allowed"), allowed_methods)))
+            }
             HttpError::BadRequest(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::BadRequest),
         }
     }
+}
+
+impl HttpHeader {
+    pub fn new(name: String, value: String) -> Self {
+        Self { name, value }
+    }
+}
+
+impl HttpHeaderCollection {
+    pub fn new() -> Self {
+        Self { headers: HashMap::new() }
+    }
+
+    pub fn from_vector(input: Vec<HttpHeader>) -> Self {
+        let mut headers = HashMap::new();
+
+        for header in input.into_iter() {
+            headers.insert(header.name.clone(), header);
+        }
+
+        Self { headers }
+    }
+
+    pub fn add_header(&mut self, key: String, value: String) {
+        let header = HttpHeader::new(key.clone(), value);
+        self.headers.insert(key, header);
+    }
+/*
+    pub fn add_header_object(&mut self, header: HttpHeader) {
+        self.headers.insert(header.name.clone(), header);
+    }
+
+    pub fn add_vector(&mut self, headers: Vec<HttpHeader>) {
+        for header in headers {
+            self.add_header_object(header);
+        }
+    }
+    */
 }
 
 impl Display for HttpStatus {
@@ -157,7 +273,23 @@ impl Display for HttpMethod {
 
 impl Display for HttpResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}\r\n\r\n", self.version, self.status)
+        write!(f, "{} {}\r\n{}\r\n{}", self.version, self.status, self.headers, self.body)
+    }
+}
+
+impl Display for HttpHeader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}\r\n", self.name, self.value)
+    }
+}
+
+impl Display for HttpHeaderCollection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut result = std::fmt::Result::Ok(());
+        for header in self.headers.values() {
+            result = write!(f, "{}", header);
+        }
+        result
     }
 }
 

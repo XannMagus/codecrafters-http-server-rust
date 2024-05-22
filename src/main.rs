@@ -88,7 +88,7 @@ fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, Htt
                 }
                 HttpMethod::POST => {
                     println!("Saving file {root}{param}");
-                    write_file(root, &param.to_string(), &String::from_utf8(request.body.unwrap()).map_err(|_| HttpError::InternalError)?)?;
+                    write_file(root, &param.to_string(), &request.body.unwrap())?;
                     Ok(HttpResponseBuilder::new()
                         .with_status(HttpStatus::Created)
                         .to_response())
@@ -124,12 +124,12 @@ fn get_file(directory: &String, filename: &String) -> Result<String, HttpError> 
     }
 }
 
-fn write_file(directory: &String, filename: &String, content: &String) -> Result<(), HttpError> {
+fn write_file(directory: &String, filename: &String, content: &Vec<u8>) -> Result<(), HttpError> {
     let path = format!("{directory}{filename}");
 
     match File::create(path) {
         Ok(mut handle) => {
-            let _ = match handle.write_all(content.as_bytes()) {
+            let _ = match handle.write_all(content) {
                 Ok(_) => Ok(()),
                 Err(e) => match e.kind() {
                     ErrorKind::PermissionDenied => Err(HttpError::Forbidden),

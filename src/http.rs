@@ -1,13 +1,19 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
+
+use crate::http::parser::Parser;
+
+mod parser;
 
 pub enum HttpStatus {
     OK,
-    MethodNotAllowed,
-    NotFound,
+    Created,
     BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    MethodNotAllowed,
     InternalError,
 }
 
@@ -44,6 +50,8 @@ pub enum HttpError {
     MethodNotAllowed(Vec<HttpMethod>),
     BadRequest(ParseError),
     InternalError,
+    Unauthorized,
+    Forbidden,
 }
 
 #[derive(Debug)]
@@ -63,6 +71,7 @@ pub struct HttpRequest {
     pub path: String,
     pub version: HttpVersion,
     pub headers: HttpHeaderCollection,
+    pub body: Option<Vec<u8>>,
 }
 
 pub struct HttpResponse {
@@ -87,56 +96,17 @@ pub enum ParseError {
     MissingVersion,
     MissingPath,
     MalformedRequest,
+    Unreachable,
 }
 
 impl HttpRequest {
-    pub fn from_stream(mut stream: &TcpStream) -> Result<Self, ParseError> {
-        let mut buf_reader = BufReader::new(&mut stream);
-        let mut request_string = String::new();
-        buf_reader.read_line(&mut request_string).or(Err(ParseError::MalformedRequest))?;
+    pub fn from_stream(stream: &TcpStream) -> Result<Self, ParseError> {
+        let parser = Parser::new();
 
-        let (method, version, path) = Self::parse_first_line(request_string)?;
-
-        let mut headers = HttpHeaderCollection::new();
-
-        for line in buf_reader.lines() {
-            if let Ok(line) = line {
-                if line.trim().is_empty() {
-                    break;
-                }
-
-                let parts: Vec<&str> = line.split(":").collect();
-
-                headers.add_header(
-                    parts.get(0).unwrap().trim().to_string(),
-                    parts.get(1).unwrap().trim().to_string(),
-                );
-            } else {
-                return Err(ParseError::MalformedRequest);
-            }
-        }
-
-        Ok(Self { method, path, version, headers })
-    }
-
-    fn parse_first_line(first_line: String) -> Result<(HttpMethod, HttpVersion, String), ParseError> {
-        let mut request_parts = first_line.split_ascii_whitespace();
-
-        let Some(method) = request_parts.next() else {
-            return Err(ParseError::MissingMethod);
-        };
-        let method = HttpMethod::from_str(method)?;
-
-        let Some(path) = request_parts.next() else {
-            return Err(ParseError::MissingPath);
-        };
-
-        let Some(version) = request_parts.next() else {
-            return Err(ParseError::MissingVersion);
-        };
-        let version = HttpVersion::from_str(version)?;
-
-        Ok((method, version, path.to_string()))
+        Ok(parser
+            .parse(stream)?
+            .get_request()
+            .map_err(|_| ParseError::Unreachable)?)
     }
 }
 
@@ -152,7 +122,7 @@ impl HttpMethod {
             "CONNECT" => Ok(HttpMethod::CONNECT),
             "PATCH" => Ok(HttpMethod::PATCH),
             "TRACE" => Ok(HttpMethod::TRACE),
-            _ => Err(ParseError::UnknownMethod(String::from(input)))
+            _ => Err(ParseError::UnknownMethod(String::from(input))),
         }
     }
 }
@@ -163,50 +133,71 @@ impl HttpVersion {
             "HTTP/1.0" => Ok(HttpVersion::V10),
             "HTTP/1.1" => Ok(HttpVersion::V11),
             "HTTP/2.0" => Ok(HttpVersion::V20),
-            _ => Err(ParseError::UnhandledVersion(String::from(input)))
+            _ => Err(ParseError::UnhandledVersion(String::from(input))),
         }
     }
 }
 
 impl HttpResponse {
     pub fn new(version: HttpVersion, status: HttpStatus) -> Self {
-        Self { version, status, body: String::new(), headers: HttpHeaderCollection::new() }
+        Self {
+            version,
+            status,
+            body: String::new(),
+            headers: HttpHeaderCollection::new(),
+        }
     }
 
-    pub fn with_headers(version: HttpVersion, status: HttpStatus, headers: Vec<HttpHeader>) -> Self {
+    pub fn with_headers(
+        version: HttpVersion,
+        status: HttpStatus,
+        headers: Vec<HttpHeader>,
+    ) -> Self {
         let headers = HttpHeaderCollection::from_vector(headers);
-        Self { version, status, headers, body: String::new() }
+        Self {
+            version,
+            status,
+            headers,
+            body: String::new(),
+        }
     }
 }
 
 impl HttpResponseBuilder {
     pub fn new() -> Self {
-        Self { version: None, status: None, headers: HttpHeaderCollection::new(), body: None }
+        Self {
+            version: None,
+            status: None,
+            headers: HttpHeaderCollection::new(),
+            body: None,
+        }
     }
-/*
-    pub fn with_version(mut self, version: HttpVersion) -> Self {
-        self.version = Some(version);
-        self
-    }
-*/
+    /*
+        pub fn with_version(mut self, version: HttpVersion) -> Self {
+            self.version = Some(version);
+            self
+        }
+    */
     pub fn with_status(mut self, status: HttpStatus) -> Self {
         self.status = Some(status);
         self
     }
 
     pub fn with_body(mut self, body: String, mime_type: MimeType) -> Self {
-        self.headers.add_header("Content-Type".to_string(), mime_type.to_string());
-        self.headers.add_header("Content-Length".to_string(), body.len().to_string());
+        self.headers
+            .add_header("Content-Type".to_string(), mime_type.to_string());
+        self.headers
+            .add_header("Content-Length".to_string(), body.len().to_string());
         self.body = Some(body);
         self
     }
 
-    /*
-        pub fn add_header(mut self, name: String, value: String) -> Self {
-            self.headers.add_header(name, value);
-            self
-        }
+    pub fn add_header(mut self, name: String, value: String) -> Self {
+        self.headers.add_header(name, value);
+        self
+    }
 
+    /*
         pub fn add_header_object(mut self, header: HttpHeader) -> Self {
             self.headers.add_header_object(header);
             self
@@ -226,23 +217,39 @@ impl HttpResponseBuilder {
             version,
             status,
             headers: self.headers,
-            body
+            body,
         }
     }
 }
-
 
 impl HttpError {
     pub fn to_response(&self) -> HttpResponse {
         match self {
             HttpError::NotFound(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::NotFound),
             HttpError::MethodNotAllowed(methods) => {
-                let allowed_methods = methods.iter().map(|method| method.to_string()).collect::<Vec<String>>().join(",");
+                let allowed_methods = methods
+                    .iter()
+                    .map(|method| method.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
                 println!("{allowed_methods}");
-                HttpResponse::with_headers(HttpVersion::V11, HttpStatus::MethodNotAllowed, vec!(HttpHeader::new(String::from("Allowed"), allowed_methods)))
+                HttpResponse::with_headers(
+                    HttpVersion::V11,
+                    HttpStatus::MethodNotAllowed,
+                    vec![HttpHeader::new(String::from("Allowed"), allowed_methods)],
+                )
             }
             HttpError::BadRequest(_) => HttpResponse::new(HttpVersion::V11, HttpStatus::BadRequest),
-            HttpError::InternalError => HttpResponseBuilder::new().with_status(HttpStatus::InternalError).to_response()
+            HttpError::InternalError => HttpResponseBuilder::new()
+                .with_status(HttpStatus::InternalError)
+                .to_response(),
+            HttpError::Unauthorized => HttpResponseBuilder::new()
+                .with_status(HttpStatus::Unauthorized)
+                .add_header("WWW-Authenticate".to_string(), "Basic".to_string())
+                .to_response(),
+            HttpError::Forbidden => HttpResponseBuilder::new()
+                .with_status(HttpStatus::Forbidden)
+                .to_response(),
         }
     }
 }
@@ -255,7 +262,9 @@ impl HttpHeader {
 
 impl HttpHeaderCollection {
     pub fn new() -> Self {
-        Self { headers: HashMap::new() }
+        Self {
+            headers: HashMap::new(),
+        }
     }
 
     pub fn from_vector(input: Vec<HttpHeader>) -> Self {
@@ -269,10 +278,10 @@ impl HttpHeaderCollection {
     }
 
     /*
-    pub fn get(&self, key: &String) -> Option<&HttpHeader> {
-        self.headers.get(key)
-    }
-*/
+        pub fn get(&self, key: &String) -> Option<&HttpHeader> {
+            self.headers.get(key)
+        }
+    */
     pub fn get_value(&self, key: &String) -> Option<String> {
         if let Some(header) = self.headers.get(key) {
             Some(header.value.clone())
@@ -285,7 +294,7 @@ impl HttpHeaderCollection {
         let header = HttpHeader::new(key.clone(), value);
         self.headers.insert(key, header);
     }
-/*
+    /*
     pub fn add_header_object(&mut self, header: HttpHeader) {
         self.headers.insert(header.name.clone(), header);
     }
@@ -305,7 +314,10 @@ impl Display for HttpStatus {
             HttpStatus::MethodNotAllowed => (405, "Method Not Allowed"),
             HttpStatus::NotFound => (404, "Not Found"),
             HttpStatus::BadRequest => (400, "Bad Request"),
-            HttpStatus::InternalError => (500, "Internal Server Error")
+            HttpStatus::InternalError => (500, "Internal Server Error"),
+            HttpStatus::Created => (201, "Created"),
+            HttpStatus::Unauthorized => (401, "Unauthorized"),
+            HttpStatus::Forbidden => (403, "Forbidden"),
         };
 
         write!(f, "{code} {description}")
@@ -332,13 +344,25 @@ impl Display for HttpMethod {
 
 impl Display for HttpResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}\r\n{}\r\n{}", self.version, self.status, self.headers, self.body)
+        write!(
+            f,
+            "{} {}\r\n{}\r\n{}",
+            self.version, self.status, self.headers, self.body
+        )
     }
 }
 
 impl Display for HttpRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {} {}\r\n{}\r\n", self.method, self.path, self.version, self.headers)
+        let body_string = match &self.body {
+            None => "",
+            Some(content) => std::str::from_utf8(content).map_err(|_| std::fmt::Error)?,
+        };
+        write!(
+            f,
+            "{} {} {}\r\n{}\r\n{body_string}",
+            self.method, self.path, self.version, self.headers
+        )
     }
 }
 

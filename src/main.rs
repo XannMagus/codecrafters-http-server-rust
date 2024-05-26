@@ -7,6 +7,7 @@ use crate::http::{
     HttpError, HttpMethod, HttpRequest, HttpResponse, HttpResponseBuilder, HttpStatus, MimeType,
 };
 
+#[allow(dead_code)]
 mod http;
 
 fn main() {
@@ -61,7 +62,7 @@ fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, Htt
             println!("Reading User-Agent Header");
             let mut response_builder = HttpResponseBuilder::new();
             if let Some(user_agent) = request.headers.get_value(&"User-Agent".to_string()) {
-                response_builder = response_builder.with_body(user_agent, MimeType::PlainText);
+                response_builder = response_builder.with_body(user_agent, MimeType::PlainText, None);
             };
             Ok(response_builder.to_response())
         }
@@ -71,7 +72,7 @@ fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, Htt
             let param = parts.get(1).unwrap_or(&"");
             println!("Echoing back the parameter {param}");
             let response = HttpResponseBuilder::new()
-                .with_body(param.to_string(), MimeType::PlainText)
+                .with_body(param.to_string(), MimeType::PlainText, request.encoding)
                 .to_response();
             Ok(response)
         }
@@ -83,7 +84,7 @@ fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, Htt
                     println!("Returning back the file {root}{param}");
                     let body = get_file(root, &param.to_string())?;
                     Ok(HttpResponseBuilder::new()
-                        .with_body(body, MimeType::OctetStream)
+                        .with_body(body, MimeType::OctetStream, request.encoding)
                         .to_response())
                 }
                 HttpMethod::POST => {

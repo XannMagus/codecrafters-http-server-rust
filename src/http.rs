@@ -54,6 +54,18 @@ pub enum HttpError {
     Forbidden,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum HttpEncoding {
+    Brotli,
+    Compress,
+    Deflate,
+    Exi,
+    Gzip,
+    Identity,
+    Zstd,
+    Unsupported,
+}
+
 #[derive(Debug)]
 pub struct HttpHeader {
     pub name: String,
@@ -71,6 +83,7 @@ pub struct HttpRequest {
     pub path: String,
     pub version: HttpVersion,
     pub headers: HttpHeaderCollection,
+    pub encoding: Option<HttpEncoding>,
     pub body: Option<Vec<u8>>,
 }
 
@@ -183,11 +196,22 @@ impl HttpResponseBuilder {
         self
     }
 
-    pub fn with_body(mut self, body: String, mime_type: MimeType) -> Self {
+    pub fn with_body(
+        mut self,
+        body: String,
+        mime_type: MimeType,
+        encoding: Option<HttpEncoding>,
+    ) -> Self {
         self.headers
             .add_header("Content-Type".to_string(), mime_type.to_string());
         self.headers
             .add_header("Content-Length".to_string(), body.len().to_string());
+        if let Some(encoding) = encoding {
+            if encoding != HttpEncoding::Unsupported {
+                self.headers
+                    .add_header("Content-Encoding".to_string(), encoding.to_string());
+            }
+        }
         self.body = Some(body);
         self
     }
@@ -251,6 +275,12 @@ impl HttpError {
                 .with_status(HttpStatus::Forbidden)
                 .to_response(),
         }
+    }
+}
+
+impl From<HttpError> for HttpResponse {
+    fn from(value: HttpError) -> Self {
+        value.to_response()
     }
 }
 
@@ -397,5 +427,48 @@ impl Display for MimeType {
 impl From<ParseError> for HttpError {
     fn from(value: ParseError) -> Self {
         Self::BadRequest(value)
+    }
+}
+
+impl From<&str> for HttpEncoding {
+    fn from(value: &str) -> Self {
+        match value {
+            "br" => Self::Brotli,
+            "gzip" => Self::Gzip,
+            "deflate" => Self::Deflate,
+            "compress" => Self::Compress,
+            "exi" => Self::Exi,
+            "zstd" => Self::Zstd,
+            "identity" => Self::Identity,
+            &_ => Self::Unsupported,
+        }
+    }
+}
+
+impl From<String> for HttpEncoding {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl From<&String> for HttpEncoding {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl Display for HttpEncoding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let string_representation = match self {
+            HttpEncoding::Brotli => "br",
+            HttpEncoding::Compress => "compress",
+            HttpEncoding::Deflate => "deflate",
+            HttpEncoding::Exi => "exi",
+            HttpEncoding::Gzip => "gzip",
+            HttpEncoding::Identity => "identity",
+            HttpEncoding::Zstd => "zstd",
+            HttpEncoding::Unsupported => "",
+        };
+        write!(f, "{string_representation}")
     }
 }

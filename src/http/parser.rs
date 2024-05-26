@@ -1,6 +1,9 @@
 use std::io::{BufRead, BufReader, Read};
 
-use crate::http::{HttpHeaderCollection, HttpMethod, HttpRequest, HttpVersion, ParseError};
+use crate::http::{
+    HttpEncoding, HttpHeaderCollection, HttpMethod, HttpRequest, HttpVersion,
+    ParseError,
+};
 
 #[derive(Eq, PartialEq)]
 enum ParserState {
@@ -18,6 +21,7 @@ pub struct Parser {
     headers: HttpHeaderCollection,
     body: Option<Vec<u8>>,
     content_length: Option<usize>,
+    content_encoding: Option<HttpEncoding>,
 }
 
 pub struct Unparsed;
@@ -32,6 +36,7 @@ impl Parser {
             headers: HttpHeaderCollection::new(),
             body: None,
             content_length: None,
+            content_encoding: None,
         }
     }
 
@@ -45,6 +50,7 @@ impl Parser {
             path: self.path.unwrap(),
             version: self.version.unwrap(),
             headers: self.headers,
+            encoding: self.content_encoding,
             body: self.body,
         })
     }
@@ -117,6 +123,9 @@ impl Parser {
         let (key, value) = (parts[0].trim().to_string(), parts[1].trim().to_string());
         if key.eq_ignore_ascii_case("Content-Length") {
             self.content_length = Some(value.parse().map_err(|_| ParseError::MalformedRequest)?);
+        }
+        if key.eq_ignore_ascii_case("Accept-Encoding") {
+            self.content_encoding = Some(HttpEncoding::from(&value));
         }
 
         self.headers.add_header(key, value);

@@ -54,13 +54,13 @@ pub enum HttpError {
     Forbidden,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd,Copy, Clone)]
 pub enum HttpEncoding {
+    Gzip,
+    Deflate,
     Brotli,
     Compress,
-    Deflate,
     Exi,
-    Gzip,
     Identity,
     Zstd,
     Unsupported,

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read};
 
 use crate::http::{
@@ -21,7 +22,7 @@ pub struct Parser {
     headers: HttpHeaderCollection,
     body: Option<Vec<u8>>,
     content_length: Option<usize>,
-    content_encoding: Option<HttpEncoding>,
+    content_encoding: BTreeSet<HttpEncoding>,
 }
 
 pub struct Unparsed;
@@ -36,7 +37,7 @@ impl Parser {
             headers: HttpHeaderCollection::new(),
             body: None,
             content_length: None,
-            content_encoding: None,
+            content_encoding: BTreeSet::new(),
         }
     }
 
@@ -50,7 +51,7 @@ impl Parser {
             path: self.path.unwrap(),
             version: self.version.unwrap(),
             headers: self.headers,
-            encoding: self.content_encoding,
+            encoding: self.content_encoding.iter().next().copied(),
             body: self.body,
         })
     }
@@ -125,7 +126,9 @@ impl Parser {
             self.content_length = Some(value.parse().map_err(|_| ParseError::MalformedRequest)?);
         }
         if key.eq_ignore_ascii_case("Accept-Encoding") {
-            self.content_encoding = Some(HttpEncoding::from(&value));
+            for encoding_string in value.split(",") {
+                self.content_encoding.insert(HttpEncoding::from(encoding_string.trim()));
+            }
         }
 
         self.headers.add_header(key, value);

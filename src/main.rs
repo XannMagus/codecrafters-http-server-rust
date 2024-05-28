@@ -35,12 +35,9 @@ fn main() {
                 println!("accepted new connection");
                 let response = handle_request(&stream, &directory);
 
-                let response = match response {
-                    Ok(good_response) => format!("{good_response}"),
-                    Err(bad_response) => format!("{}", bad_response.to_response()),
-                };
+                let response = response.unwrap_or_else(|bad_response| bad_response.to_response());
 
-                stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(response.to_bytes().as_slice()).unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -62,7 +59,8 @@ fn handle_request(stream: &TcpStream, root: &String) -> Result<HttpResponse, Htt
             println!("Reading User-Agent Header");
             let mut response_builder = HttpResponseBuilder::new();
             if let Some(user_agent) = request.headers.get_value(&"User-Agent".to_string()) {
-                response_builder = response_builder.with_body(user_agent, MimeType::PlainText, None);
+                response_builder =
+                    response_builder.with_body(user_agent, MimeType::PlainText, None);
             };
             Ok(response_builder.to_response())
         }

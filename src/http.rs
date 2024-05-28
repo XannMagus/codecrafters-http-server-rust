@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::io::Write;
 use std::net::TcpStream;
+
+use flate2::Compression;
+use flate2::write::{DeflateEncoder, GzEncoder};
 
 use crate::http::parser::Parser;
 
@@ -54,7 +58,7 @@ pub enum HttpError {
     Forbidden,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd,Copy, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Copy, Clone)]
 pub enum HttpEncoding {
     Gzip,
     Deflate,
@@ -91,14 +95,14 @@ pub struct HttpResponse {
     version: HttpVersion,
     status: HttpStatus,
     headers: HttpHeaderCollection,
-    body: String,
+    body: Vec<u8>,
 }
 
 pub struct HttpResponseBuilder {
     version: Option<HttpVersion>,
     status: Option<HttpStatus>,
     headers: HttpHeaderCollection,
-    body: Option<String>,
+    body: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -156,7 +160,7 @@ impl HttpResponse {
         Self {
             version,
             status,
-            body: String::new(),
+            body: Vec::new(),
             headers: HttpHeaderCollection::new(),
         }
     }
@@ -171,8 +175,25 @@ impl HttpResponse {
             version,
             status,
             headers,
-            body: String::new(),
+            body: Vec::new(),
         }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = vec![];
+
+        buffer.extend_from_slice(self.version.to_string().as_bytes());
+        buffer.extend_from_slice(" ".as_bytes());
+        buffer.extend_from_slice(self.status.to_string().as_bytes());
+        buffer.extend_from_slice("\r\n".as_bytes());
+        buffer.extend_from_slice(self.headers.to_string().as_bytes());
+        buffer.extend_from_slice("\r\n".as_bytes());
+
+        if !self.body.is_empty() {
+            buffer.extend_from_slice(&self.body);
+        }
+
+        buffer
     }
 }
 
@@ -185,12 +206,7 @@ impl HttpResponseBuilder {
             body: None,
         }
     }
-    /*
-        pub fn with_version(mut self, version: HttpVersion) -> Self {
-            self.version = Some(version);
-            self
-        }
-    */
+
     pub fn with_status(mut self, status: HttpStatus) -> Self {
         self.status = Some(status);
         self
@@ -202,17 +218,36 @@ impl HttpResponseBuilder {
         mime_type: MimeType,
         encoding: Option<HttpEncoding>,
     ) -> Self {
-        self.headers
-            .add_header("Content-Type".to_string(), mime_type.to_string());
-        self.headers
-            .add_header("Content-Length".to_string(), body.len().to_string());
+        let mut encoded_body = body.into_bytes();
         if let Some(encoding) = encoding {
             if encoding != HttpEncoding::Unsupported {
                 self.headers
                     .add_header("Content-Encoding".to_string(), encoding.to_string());
             }
+            encoded_body = match encoding {
+                HttpEncoding::Gzip => {
+                    let mut e = GzEncoder::new(Vec::new(), Compression::default());
+                    e.write_all(encoded_body.as_slice()).unwrap();
+                    e.finish().unwrap()
+                }
+                HttpEncoding::Deflate => {
+                    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
+                    e.write_all(encoded_body.as_slice()).unwrap();
+                    e.finish().unwrap()
+                }
+                HttpEncoding::Brotli
+                | HttpEncoding::Compress
+                | HttpEncoding::Exi
+                | HttpEncoding::Identity
+                | HttpEncoding::Zstd
+                | HttpEncoding::Unsupported => Vec::new(),
+            };
         }
-        self.body = Some(body);
+        self.headers
+            .add_header("Content-Type".to_string(), mime_type.to_string());
+        self.headers
+            .add_header("Content-Length".to_string(), encoded_body.len().to_string());
+        self.body = Some(encoded_body);
         self
     }
 
@@ -221,21 +256,10 @@ impl HttpResponseBuilder {
         self
     }
 
-    /*
-        pub fn add_header_object(mut self, header: HttpHeader) -> Self {
-            self.headers.add_header_object(header);
-            self
-        }
-
-        pub fn add_headers(mut self, headers: Vec<HttpHeader>) -> Self {
-            self.headers.add_vector(headers);
-            self
-        }
-    */
     pub fn to_response(self) -> HttpResponse {
         let version = self.version.unwrap_or(HttpVersion::V11);
         let status = self.status.unwrap_or(HttpStatus::OK);
-        let body = self.body.unwrap_or(String::new());
+        let body = self.body.unwrap_or(Vec::new());
 
         HttpResponse {
             version,
@@ -377,7 +401,10 @@ impl Display for HttpResponse {
         write!(
             f,
             "{} {}\r\n{}\r\n{}",
-            self.version, self.status, self.headers, self.body
+            self.version,
+            self.status,
+            self.headers,
+            String::from_utf8(self.body.clone()).unwrap_or(String::new())
         )
     }
 }
